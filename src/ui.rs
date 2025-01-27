@@ -1,68 +1,55 @@
-use std::{collections::HashMap, io};
+use std::{any::Any, cmp::min, collections::HashMap, io};
 
 use ratatui::{
+    buffer::Buffer,
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
-    layout::{Constraint, Direction, Layout},
+    layout::Rect,
     prelude::Color,
     style::Stylize,
-    widgets::{
-        canvas::{Canvas, Rectangle},
-        Paragraph, Widget,
-    },
+    widgets::{Paragraph, Widget},
     Frame,
 };
 
 use crate::state::{Bar, State};
 
-const TILE_COLORS: [(i32, Color); 1] = [(0, Color::Rgb(0x99, 0xe5, 0x99))];
+const BLOCK: &str = "\u{2588}\u{2588}";
 
-fn map_canvas(map: &[Vec<i32>], scale: f64) -> impl Widget + '_ {
-    Canvas::default()
-        .x_bounds([0., scale])
-        .y_bounds([0., scale])
-        .paint(move |ctx| {
-            let color_map = HashMap::from(TILE_COLORS);
-            let x = map.len();
-            let y = map.get(0).map(Vec::len).unwrap_or(0);
-            let sx = scale / x as f64;
-            let sy = scale / y as f64;
-            for i in 0..x {
-                for j in 0..y {
-                    ctx.draw(&Rectangle {
-                        color: color_map[&map[i][j]],
-                        x: i as f64 * sx,
-                        y: j as f64 * sy,
-                        height: sx,
-                        width: sx,
-                    })
-                }
-            }
-        })
+fn render_canvas(map: &[Vec<i32>], tile_colors: &HashMap<i32, u32>, area: Rect, buf: &mut Buffer) {
+    for i in 0..map.len() {
+        for j in 0..map[0].len() {
+            Paragraph::new(BLOCK)
+                .fg(Color::from_u32(tile_colors[&map[j][i]]))
+                .render(
+                    Rect::new(area.x + 2 * i as u16, area.y + j as u16, 2, 1),
+                    buf,
+                );
+        }
+    }
 }
 
 impl State {
     pub(crate) fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
         let buf = frame.buffer_mut();
-        let layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(vec![Constraint::Fill(1), Constraint::Max(1)])
-            .split(area);
+        let bar_height = if self.bar == Bar::Closed { 0 } else { 1 };
+        let sidelen = area.width.min(area.height - bar_height).max(2) - 2;
+        let map_rect = Rect::new(1, 1, sidelen, sidelen);
 
         match *self.map() {
-            Some(map) => map_canvas(map, 10.).render(layout[0], buf),
-            None => Paragraph::new("no map :(").render(layout[0], buf),
+            Some(map) => render_canvas(map, &(*self.tile_data()).colors, map_rect, buf),
+            None => Paragraph::new("no map :(").render(map_rect, buf),
         }
 
+        let bar_rect = Rect::new(0, area.height.max(1) - 1, area.width, 1);
         match &self.bar {
             Bar::Input(input) => {
-                Paragraph::new(":".to_owned() + input.text().as_ref()).render(layout[1], buf);
-                frame.set_cursor_position((input.cursor() as u16 + 1, layout[1].y));
+                Paragraph::new(":".to_owned() + input.text().as_ref()).render(bar_rect, buf);
+                frame.set_cursor_position((input.cursor() as u16 + 1, bar_rect.y));
             }
             Bar::Err(err) => {
                 Paragraph::new(err.as_str())
                     .fg(Color::Red)
-                    .render(layout[1], buf);
+                    .render(bar_rect, buf);
             }
             _ => (),
         }

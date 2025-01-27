@@ -1,3 +1,4 @@
+#[derive(PartialEq, Eq)]
 pub(crate) struct Input {
     text: String,
     cursor: usize,

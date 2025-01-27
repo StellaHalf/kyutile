@@ -17,7 +17,7 @@ fn main() {
 
 fn launch() -> Result<(), io::Error> {
     let mut terminal = ratatui::init();
-    let mut state: State = State::NEW;
+    let mut state: State = State::new()?;
 
     while !state.exit() {
         terminal.draw(|frame| state.draw(frame))?;

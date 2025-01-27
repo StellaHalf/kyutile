@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt,
     fs::{read_to_string, write},
     io,
@@ -7,16 +8,25 @@ use std::{
 
 use ratatui::crossterm::event::KeyCode;
 
-use crate::bar::Input;
 use crate::parse::{export_map, parse_map};
+use crate::{bar::Input, parse::parse_tile_data};
 
+#[derive(PartialEq, Eq)]
 pub(crate) enum Bar {
     Closed,
     Input(Input),
     Err(String),
 }
 
+const TILES_PATH: &str = "data/tiles.toml";
+
+pub(crate) struct TileData {
+    pub(crate) names: HashMap<i32, String>,
+    pub(crate) colors: HashMap<i32, u32>,
+}
+
 pub(crate) struct State {
+    data: TileData,
     exit: bool,
     map: Option<Vec<Vec<i32>>>,
     path: Option<String>,
@@ -26,17 +36,24 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) const NEW: State = State {
-        exit: false,
-        map: None,
-        path: None,
-        modified: false,
-        tile: 0,
-        bar: Bar::Closed,
-    };
+    pub(crate) fn new() -> Result<State, io::Error> {
+        Ok(State {
+            data: parse_tile_data(&read_to_string(TILES_PATH)?),
+            exit: false,
+            map: None,
+            path: None,
+            modified: false,
+            tile: 0,
+            bar: Bar::Closed,
+        })
+    }
 
     pub(crate) fn exit(&self) -> bool {
         self.exit
+    }
+
+    pub(crate) fn tile_data(&self) -> Box<&TileData> {
+        Box::new(&self.data)
     }
 
     pub(crate) fn map(&self) -> Box<&Option<Vec<Vec<i32>>>> {
