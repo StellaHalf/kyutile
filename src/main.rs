@@ -1,14 +1,11 @@
-use std::{
-    error,
-    io::{self, stdout},
-};
+use std::io::{self};
 
-use commands::State;
-use ratatui::{prelude::CrosstermBackend, Terminal};
+use state::State;
 
-mod commands;
+mod bar;
 mod map;
 mod parse;
+mod state;
 mod ui;
 
 fn main() {
@@ -22,10 +19,11 @@ fn launch() -> Result<(), io::Error> {
     let mut terminal = ratatui::init();
     let mut state: State = State::NEW;
 
-    while !state.is_exit() {
+    while !state.exit() {
         terminal.draw(|frame| state.draw(frame))?;
         state.handle_events()?
     }
 
+    ratatui::restore();
     Ok(())
 }
