@@ -1,55 +1,73 @@
-use std::{any::Any, cmp::min, collections::HashMap, io};
+use std::io;
 
 use ratatui::{
     buffer::Buffer,
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
-    layout::Rect,
+    layout::{Constraint, Layout, Rect},
     prelude::Color,
     style::Stylize,
     widgets::{Paragraph, Widget},
     Frame,
 };
 
-use crate::state::{Bar, State};
+use crate::{
+    bar::Input,
+    state::{Bar, State},
+};
 
-const BLOCK: &str = "\u{2588}\u{2588}";
-
-fn render_canvas(map: &[Vec<i32>], tile_colors: &HashMap<i32, u32>, area: Rect, buf: &mut Buffer) {
-    for i in 0..map.len() {
-        for j in 0..map[0].len() {
-            Paragraph::new(BLOCK)
-                .fg(Color::from_u32(tile_colors[&map[j][i]]))
-                .render(
-                    Rect::new(area.x + 2 * i as u16, area.y + j as u16, 2, 1),
-                    buf,
-                );
-        }
-    }
-}
+const BF: &str = "\u{2588}\u{2588}";
+const BS: &str = "\u{259e}\u{259e}";
+const BC: &str = "\u{3010}\u{3011}";
 
 impl State {
+    fn render_map(&self, area: Rect, buf: &mut Buffer) {
+        match &self.map {
+            Some(map) => {
+                for i in 0..map.len() {
+                    for j in 0..map[0].len() {
+                        Paragraph::new(if j == self.cursorx && i == self.cursory {
+                            BC
+                        } else if self.select.contains(&(i, j)) {
+                            BS
+                        } else {
+                            BF
+                        })
+                        .fg(Color::from_u32(self.data.colors[&map[j][i]]))
+                        .render(
+                            Rect::new(area.x + 2 * i as u16, area.y + j as u16, 2, 1),
+                            buf,
+                        );
+                    }
+                }
+            }
+            None => Paragraph::new(
+                "No map loaded. Use :o <path> to load a map, or :c <options> to create one.",
+            )
+            .render(area, buf),
+        }
+    }
+
     pub(crate) fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
         let buf = frame.buffer_mut();
-        let bar_height = if self.bar == Bar::Closed { 0 } else { 1 };
-        let sidelen = area.width.min(area.height - bar_height).max(2) - 2;
-        let map_rect = Rect::new(1, 1, sidelen, sidelen);
+        let ui_area = Rect::new(0, 0, area.width, area.height - 1);
+        let ui_layout =
+            Layout::horizontal(vec![Constraint::Fill(1), Constraint::Length(5)]).split(ui_area);
+        let tile_layout =
+            Layout::vertical(vec![Constraint::Fill(1), Constraint::Fill(1)]).split(ui_layout[1]);
 
-        match *self.map() {
-            Some(map) => render_canvas(map, &(*self.tile_data()).colors, map_rect, buf),
-            None => Paragraph::new("no map :(").render(map_rect, buf),
-        }
+        self.render_map(ui_layout[0], buf);
 
-        let bar_rect = Rect::new(0, area.height.max(1) - 1, area.width, 1);
+        let bar_area = Rect::new(0, area.height.max(1) - 1, area.width, 1);
         match &self.bar {
             Bar::Input(input) => {
-                Paragraph::new(":".to_owned() + input.text().as_ref()).render(bar_rect, buf);
-                frame.set_cursor_position((input.cursor() as u16 + 1, bar_rect.y));
+                Paragraph::new(":".to_owned() + input.text().as_ref()).render(bar_area, buf);
+                frame.set_cursor_position((input.cursor() as u16 + 1, bar_area.y));
             }
             Bar::Err(err) => {
                 Paragraph::new(err.as_str())
                     .fg(Color::Red)
-                    .render(bar_rect, buf);
+                    .render(bar_area, buf);
             }
             _ => (),
         }
@@ -73,7 +91,7 @@ impl State {
                 KeyCode::Char(c) => input.write(*c),
                 KeyCode::Backspace => input.backspace(),
                 KeyCode::Delete => input.delete(),
-                KeyCode::Esc => self.clear_bar(),
+                KeyCode::Esc => self.bar = Bar::Closed,
                 KeyCode::Enter => {
                     let text = input.text();
                     if let Err(err) = self.parse_command(&text) {
@@ -86,7 +104,7 @@ impl State {
             },
             Bar::Closed => self.receive_key_closed(code),
             Bar::Err(_) => {
-                self.clear_bar();
+                self.bar = Bar::Closed;
                 self.receive_key_closed(code);
             }
         }
@@ -94,7 +112,7 @@ impl State {
 
     fn receive_key_closed(&mut self, code: KeyCode) {
         match &code {
-            KeyCode::Char(':') => self.begin_input(),
+            KeyCode::Char(':') => self.bar = Bar::Input(Input::empty()),
             _ => (),
         }
     }
