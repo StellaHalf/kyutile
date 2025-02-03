@@ -10,10 +10,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::{
-    bar::Input,
-    state::{Bar, State},
-};
+use crate::state::{Bar, State};
 
 impl State {
     fn render_map(&self, area: Rect, buf: &mut Buffer) {
@@ -22,7 +19,7 @@ impl State {
                 for i in 0..map.len() {
                     for j in 0..map[0].len() {
                         let cursor = j == self.cursorx && i == self.cursory;
-                        let select = self.select.contains(&(j, i));
+                        let select = self.select.contains(&(i, j));
                         Paragraph::new(if cursor {
                             "◀▶"
                         } else if select {
@@ -30,14 +27,14 @@ impl State {
                         } else {
                             "  "
                         })
-                        .bg(Color::from_u32(self.data.colors[&map[j][i]]))
+                        .bg(Color::from_u32(self.data.colors[&map[i][j]]))
                         .fg(if select {
                             Color::Rgb(0, 0, 255)
                         } else {
                             Color::Rgb(255, 0, 0)
                         })
                         .render(
-                            Rect::new(area.x + 2 * i as u16, area.y + j as u16, 2, 1),
+                            Rect::new(area.x + 2 * j as u16, area.y + i as u16, 2, 1),
                             buf,
                         );
                     }
@@ -108,35 +105,5 @@ impl State {
                 self.receive_key_closed(code);
             }
         }
-    }
-
-    fn receive_key_closed(&mut self, code: KeyCode) {
-        let _ = match &code {
-            KeyCode::Char(':') => Ok(self.bar = Bar::Input(Input::empty())),
-            KeyCode::Char('h') | KeyCode::Left => self.r#move(&["left"]),
-            KeyCode::Char('j') | KeyCode::Down => self.r#move(&["down"]),
-            KeyCode::Char('k') | KeyCode::Up => self.r#move(&["up"]),
-            KeyCode::Char('l') | KeyCode::Right => self.r#move(&["right"]),
-            KeyCode::Char('H') => self.edge(&["left"]),
-            KeyCode::Char('J') => self.edge(&["down"]),
-            KeyCode::Char('K') => self.edge(&["up"]),
-            KeyCode::Char('L') => self.edge(&["right"]),
-            KeyCode::Char('d') => self.dot(&[]),
-            KeyCode::Char('a') => self.brush(&["add"]),
-            KeyCode::Char('s') => self.brush(&["subtract"]),
-            KeyCode::Char('i') => self.mode(&["draw"]),
-            KeyCode::Esc => {
-                let _ = self.mode(&["normal"]);
-                self.argument = 0;
-                Ok(())
-            }
-            KeyCode::Char('o') => self.bucket(&[]),
-            KeyCode::Char('p') => self.pick(&[]),
-            KeyCode::Char(c) => Ok(match c.to_digit(10) {
-                Some(i) => self.append_argument(i as u8),
-                None => {}
-            }),
-            _ => Ok(()),
-        };
     }
 }
