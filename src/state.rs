@@ -5,7 +5,7 @@ use std::{
 };
 
 use itertools::Itertools;
-use ratatui::crossterm::{cursor::RestorePosition, event::KeyCode};
+use ratatui::crossterm::event::KeyCode;
 
 use crate::{bar::Input, map::draw_all, parse::parse_tile_data};
 use crate::{
@@ -106,14 +106,6 @@ fn parse_usize(arg: &str) -> Result<usize, String> {
         .map_err(|_| format!("Parse error: {} is not an integer.", arg))
 }
 
-fn flex_irange(from: isize, to: isize) -> impl Iterator<Item = isize> {
-    if from < to {
-        from..=to
-    } else {
-        to..=from
-    }
-}
-
 impl State {
     pub(crate) fn new() -> Result<State, io::Error> {
         Ok(State {
@@ -153,7 +145,7 @@ impl State {
     }
 
     pub(crate) fn write(&mut self, args: &[&str]) -> Result<(), String> {
-        if let Some(&path) = args.get(0) {
+        if let Some(&path) = args.first() {
             self.path = Some(path.to_owned())
         }
         match &self.path {
@@ -355,7 +347,7 @@ impl State {
 
     pub(crate) fn pick(&mut self, _: &[&str]) -> Result<(), String> {
         if let Some(map) = &self.map {
-            self.brush = Brush::Tile(map[self.cursorx][self.cursory]);
+            self.brush = Brush::Tile(map[self.cursory][self.cursorx]);
         }
         Ok(())
     }
@@ -382,7 +374,7 @@ impl State {
         }
     }
 
-    //TODO: Select all none invert, Fuzzy, Select-tile, circle, square
+    //TODO: Fuzzy, Select-tile, circle, square, undo
 
     pub(crate) fn parse_command(&mut self, text: &str) -> Result<(), String> {
         if let Some((name, args)) = text.split(" ").collect::<Vec<_>>().split_first() {
@@ -455,14 +447,17 @@ impl State {
             KeyCode::Char('L') => self.edge(&["right"]),
             KeyCode::Char('d') => self.dot(&[]),
             KeyCode::Char('a') => self.brush(&["add"]),
-            KeyCode::Char('S') => self.brush(&["subtract"]),
+            KeyCode::Char('s') => self.brush(&["subtract"]),
             KeyCode::Char('i') => self.mode(&["draw"]),
             KeyCode::Char('I') => self.mode(&["normal"]),
+            KeyCode::Char('A') => self.select(&["all"]),
+            KeyCode::Char('S') => self.select(&["none"]),
+            KeyCode::Char('F') => self.select(&["invert"]),
             KeyCode::Esc => {
                 self.argument = 0;
                 Ok(())
             }
-            KeyCode::Char('o') => self.bucket(&[]),
+            KeyCode::Char('f') => self.bucket(&[]),
             KeyCode::Char('p') => self.pick(&[]),
             KeyCode::Char(c) => Ok(if let Some(i) = c.to_digit(10) {
                 self.append_argument(i as u8)
