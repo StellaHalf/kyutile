@@ -212,20 +212,30 @@ impl State {
 
     pub(crate) fn brush(&mut self, args: &[&str]) -> Result<(), String> {
         match args[0].to_lowercase().as_str() {
-            "add" => Ok(self.brush = Brush::Add),
-            "subtract" => Ok(self.brush = Brush::Subtract),
+            "add" => {
+                self.brush = Brush::Add;
+                Ok(())
+            },
+            "subtract" => {
+                self.brush = Brush::Subtract;
+                Ok(())
+            },
             tile => match self
                 .data
                 .names
                 .iter()
                 .find(|(_, v)| tile.to_lowercase() == *v.to_lowercase())
             {
-                Some((k, _)) => Ok(self.brush = Brush::Tile(*k)),
+                Some((k, _)) => {
+                    self.brush = Brush::Tile(*k);
+                    Ok(())
+                },
                 None => match tile.parse::<i32>() {
                     Err(_) => Err(format!("Tile {} not found.", tile)),
                     Ok(i) => {
                         if self.data.colors.contains_key(&i) {
-                            Ok(self.brush = Brush::Tile(i))
+                            self.brush = Brush::Tile(i);
+                            Ok(())
                         } else {
                             Err(format!("Tile number {} not found", tile))
                         }
@@ -237,8 +247,14 @@ impl State {
 
     pub(crate) fn mode(&mut self, args: &[&str]) -> Result<(), String> {
         match args[0].to_lowercase().as_str() {
-            "normal" => Ok(self.mode = Mode::Normal),
-            "draw" => Ok(self.mode = Mode::Draw),
+            "normal" => {
+                self.mode = Mode::Normal;
+                Ok(())
+            },
+            "draw" => {
+                self.mode = Mode::Draw;
+                Ok(())
+            },
             _ => Err(format!(
                 "Mode {} not found, options are Normal, Draw.",
                 args[0]
@@ -257,7 +273,7 @@ impl State {
     }
 
     fn move_cursor(&mut self, direction: Direction, distance: usize) -> Result<(), String> {
-        Ok(if let Some(map) = &mut self.map {
+        if let Some(map) = &mut self.map {
             let (nx, ny, positions) = match direction {
                 Direction::Left => {
                     let nx = (self.cursorx as isize - distance as isize).max(0) as usize;
@@ -313,7 +329,8 @@ impl State {
                     }
                 }
             }
-        })
+        };
+        Ok(())
     }
 
     pub(crate) fn edge(&mut self, args: &[&str]) -> Result<(), String> {
@@ -356,14 +373,21 @@ impl State {
         if let Some(map) = &self.map {
             match args[0].to_lowercase().as_str() {
                 "all" => {
-                    Ok(self.select = ((0..map.len()).cartesian_product(0..map[0].len())).collect())
+                    self.select = ((0..map.len()).cartesian_product(0..map[0].len())).collect();
+                    Ok(())
                 }
-                "none" => Ok(self.select.clear()),
-                "invert" => Ok(
+                "none" => {
+                    self.select.clear();
+                    Ok(())
+                },
+                "invert" => {
                     self.select = ((0..map.len()).cartesian_product(0..map[0].len()))
-                        .filter(|p| !self.select.contains(p))
-                        .collect(),
-                ),
+                    .filter(|p| !self.select.contains(p))
+                    .collect();
+                    Ok(
+                        (),
+                    )
+                },
                 _ => Err(format!(
                     "Option {} not found. Options are all, none, invert.",
                     args[0]
@@ -380,12 +404,12 @@ impl State {
         if let Some((name, args)) = text.split(" ").collect::<Vec<_>>().split_first() {
             match COMMANDS
                 .iter()
-                .find(|c| c.name == *name || c.aliases.contains(&name))
+                .find(|c| c.name == *name || c.aliases.contains(name))
             {
                 None => Err(format!("Command {} not found.", name)),
                 Some(command) => {
                     if args.len() >= command.argsmin && args.len() <= command.argsmax {
-                        (command.function)(self, &args)
+                        (command.function)(self, args)
                     } else {
                         Err(format!(
                             "Incorrect number of arguments for {}: expected {}, found {}.",
@@ -436,7 +460,10 @@ impl State {
     }
     pub(crate) fn receive_key_closed(&mut self, code: KeyCode) {
         let _ = match &code {
-            KeyCode::Char(':') => Ok(self.bar = Bar::Input(Input::empty())),
+            KeyCode::Char(':') => {
+                self.bar = Bar::Input(Input::empty());
+                Ok(())
+            },
             KeyCode::Char('h') | KeyCode::Left => self.move_with(Direction::Left),
             KeyCode::Char('j') | KeyCode::Down => self.move_with(Direction::Down),
             KeyCode::Char('k') | KeyCode::Up => self.move_with(Direction::Up),
@@ -459,9 +486,12 @@ impl State {
             }
             KeyCode::Char('f') => self.bucket(&[]),
             KeyCode::Char('p') => self.pick(&[]),
-            KeyCode::Char(c) => Ok(if let Some(i) = c.to_digit(10) {
-                self.append_argument(i as u8)
-            }),
+            KeyCode::Char(c) => {
+                if let Some(i) = c.to_digit(10) {
+                    self.append_argument(i as u8)
+                };
+                Ok(())
+            },
             _ => Ok(()),
         };
     }

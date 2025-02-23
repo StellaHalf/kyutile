@@ -22,7 +22,7 @@ fn main() {
     } else if args.contains(&"--version".to_owned()) | args.contains(&"-V".to_owned()) {
         println!("kyutile {}", VERSION)
     } else {
-        match launch(&args.get(0)) {
+        match launch(&args.first()) {
             Ok(_) => (),
             Err(err) => eprintln!("An IO error has occurred: {}.", err),
         }
