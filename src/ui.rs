@@ -1,13 +1,13 @@
 use std::io;
 
 use ratatui::{
+    Frame,
     buffer::Buffer,
     crossterm::event::{self, Event, KeyCode, KeyEventKind},
     layout::Rect,
     prelude::Color,
     style::Stylize,
     widgets::{Paragraph, Widget},
-    Frame,
 };
 
 use crate::state::{Bar, State};
@@ -16,10 +16,10 @@ impl State {
     fn render_map(&self, area: Rect, buf: &mut Buffer) {
         match &self.map {
             Some(map) => {
-                for i in 0..map.len() {
-                    for j in 0..map[0].len() {
+                for i in 0..map.map.len() {
+                    for j in 0..map.map[0].len() {
                         let cursor = j == self.cursorx && i == self.cursory;
-                        let select = self.select.contains(&(i, j));
+                        let select = map.select.contains(&(i, j));
                         Paragraph::new(if cursor {
                             "◀▶"
                         } else if select {
@@ -27,7 +27,7 @@ impl State {
                         } else {
                             "  "
                         })
-                        .bg(Color::from_u32(self.data.colors[&map[i][j]]))
+                        .bg(Color::from_u32(self.data.colors[&map.map[i][j]]))
                         .fg(if select {
                             Color::Rgb(0, 0, 255)
                         } else {

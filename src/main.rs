@@ -37,7 +37,6 @@ fn launch(arg: &Option<&String>) -> Result<(), io::Error> {
             let _ = state.open(&[path]);
         } else {
             state.path = Some((*path).clone());
-            state.modified = true;
         }
     }
 

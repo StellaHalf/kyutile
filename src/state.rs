@@ -7,7 +7,11 @@ use std::{
 use itertools::Itertools;
 use ratatui::crossterm::event::KeyCode;
 
-use crate::{bar::Input, map::draw_all, parse::parse_tile_data};
+use crate::{
+    bar::Input,
+    map::{create, draw_all},
+    parse::parse_tile_data,
+};
 use crate::{
     map::dot,
     parse::{export_map, parse_map},
@@ -40,19 +44,26 @@ pub(crate) struct TileData {
     pub(crate) colors: HashMap<i32, u32>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct Map {
+    pub(crate) map: Vec<Vec<i32>>,
+    pub(crate) select: HashSet<(usize, usize)>,
+}
+
 pub(crate) struct State {
+    pub(crate) map: Option<Map>,
+    pub(crate) last_saved: Option<Vec<Vec<i32>>>,
     pub(crate) bar: Bar,
     pub(crate) cursorx: usize,
     pub(crate) cursory: usize,
     pub(crate) mode: Mode,
-    pub(crate) select: HashSet<(usize, usize)>,
     pub(crate) data: TileData,
     pub(crate) exit: bool,
-    pub(crate) map: Option<Vec<Vec<i32>>>,
     pub(crate) argument: usize,
-    pub(crate) modified: bool,
     pub(crate) path: Option<String>,
     pub(crate) brush: Brush,
+    undo_stack: Vec<Map>,
+    redo_stack: Vec<Map>,
 }
 
 struct Command {
@@ -105,23 +116,54 @@ fn parse_usize(arg: &str) -> Result<usize, String> {
     arg.parse()
         .map_err(|_| format!("Parse error: {} is not an integer.", arg))
 }
+fn parse_tile(names: HashMap<i32, String>, tile: &str) -> Result<i32, String> {
+    Ok(
+        match names
+            .iter()
+            .find(|(_, v)| tile.to_lowercase() == *v.to_lowercase())
+        {
+            Some((k, _)) => *k,
+            None => match tile.parse::<i32>() {
+                Err(_) => Err(format!("Tile {} not found.", tile))?,
+                Ok(i) => {
+                    if names.contains_key(&i) {
+                        i
+                    } else {
+                        Err(format!("Tile number {} not found", tile))?
+                    }
+                }
+            },
+        },
+    )
+}
 
 impl State {
     pub(crate) fn new() -> Result<State, io::Error> {
         Ok(State {
             data: parse_tile_data(&read_to_string(CONFIG_PATH.to_owned() + TILE_PATH)?),
-            exit: false,
             map: None,
+            last_saved: None,
+            exit: false,
             path: None,
             mode: Mode::Normal,
             cursorx: 0,
             cursory: 0,
-            modified: false,
             argument: 0,
             brush: Brush::Tile(0),
-            select: HashSet::new(),
             bar: Bar::Closed,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         })
+    }
+
+    pub(crate) fn modified(&self) -> bool {
+        match &self.map {
+            None => false,
+            Some(map) => match &self.last_saved {
+                None => false,
+                Some(saved) => map.map != *saved,
+            },
+        }
     }
 
     pub(crate) fn append_argument(&mut self, digit: u8) {
@@ -134,13 +176,26 @@ impl State {
     }
 
     pub(crate) fn open(&mut self, args: &[&str]) -> Result<(), String> {
+        if self.modified() {
+            Err(
+                "Unsaved changes (use :o! to discard them and open another file or :w to save them).".to_owned(),
+            )
+        } else {
+            self.open_force(args)
+        }
+    }
+
+    fn open_force(&mut self, args: &[&str]) -> Result<(), String> {
         let path = args[0];
-        self.map = Some(
+        let map =
             parse_map(&read_to_string(path).map_err(|_| format!("Could not open file {}.", path))?)
-                .map_err(|e| format!("Could not parse map: {}", e))?,
-        );
+                .map_err(|_| "Could not parse map.")?;
+        self.map = Some(Map {
+            map: map.clone(),
+            select: HashSet::new(),
+        });
         self.path = Some(path.to_owned());
-        self.modified = false;
+        self.last_saved = Some(map);
         Ok(())
     }
 
@@ -150,16 +205,16 @@ impl State {
         }
         match &self.path {
             None => Err("No path set (use :w <path>).".to_owned()),
-            Some(path) => match &self.map {
+            Some(path) => match &mut self.map {
                 None => Err("No map in buffer (use :o <path> to open a map or :n <width> <height> to create a new one).".to_owned()),
-                Some(map) => { write(path, export_map(map))
-                .map_err(|_| format!("Could not write to file {}.", path))?; self.modified = false; Ok(()) },
+                Some(map) => { write(path, export_map(&map.map))
+                .map_err(|_| format!("Could not write to file {}.", path))?; self.last_saved = Some(map.map.clone()); Ok(()) },
             }
         }
     }
 
     pub(crate) fn quit(&mut self, _: &[&str]) -> Result<(), String> {
-        if self.modified {
+        if self.modified() {
             Err(
                 "Unsaved changes (use :q! to discard them and quit or :wq to save and quit)."
                     .to_owned(),
@@ -182,9 +237,10 @@ impl State {
     }
     pub(crate) fn bucket(&mut self, _: &[&str]) -> Result<(), String> {
         if let Some(map) = &mut self.map {
+            let map_clone = map.clone();
             if let Brush::Tile(tile) = self.brush {
-                if draw_all(map, &mut self.select.iter(), tile) {
-                    self.modified = true;
+                if draw_all(&mut map.map, &mut map.select.iter(), tile) {
+                    self.push_undo(map_clone);
                 }
             }
         };
@@ -193,17 +249,22 @@ impl State {
 
     pub(crate) fn dot(&mut self, _: &[&str]) -> Result<(), String> {
         if let Some(map) = &mut self.map {
+            let map_clone = map.clone();
             match self.brush {
                 Brush::Tile(tile) => {
-                    if dot(map, self.cursory, self.cursorx, tile) {
-                        self.modified = true
+                    if dot(&mut map.map, self.cursory, self.cursorx, tile) {
+                        self.push_undo(map_clone);
                     }
                 }
                 Brush::Add => {
-                    self.select.insert((self.cursory, self.cursorx));
+                    if map.select.insert((self.cursory, self.cursorx)) {
+                        self.push_undo(map_clone);
+                    }
                 }
                 Brush::Subtract => {
-                    self.select.remove(&(self.cursory, self.cursorx));
+                    if map.select.remove(&(self.cursory, self.cursorx)) {
+                        self.push_undo(map_clone);
+                    }
                 }
             }
         };
@@ -214,35 +275,13 @@ impl State {
         match args[0].to_lowercase().as_str() {
             "add" => {
                 self.brush = Brush::Add;
-                Ok(())
-            },
+            }
             "subtract" => {
                 self.brush = Brush::Subtract;
-                Ok(())
-            },
-            tile => match self
-                .data
-                .names
-                .iter()
-                .find(|(_, v)| tile.to_lowercase() == *v.to_lowercase())
-            {
-                Some((k, _)) => {
-                    self.brush = Brush::Tile(*k);
-                    Ok(())
-                },
-                None => match tile.parse::<i32>() {
-                    Err(_) => Err(format!("Tile {} not found.", tile)),
-                    Ok(i) => {
-                        if self.data.colors.contains_key(&i) {
-                            self.brush = Brush::Tile(i);
-                            Ok(())
-                        } else {
-                            Err(format!("Tile number {} not found", tile))
-                        }
-                    }
-                },
-            },
-        }
+            }
+            tile => self.brush = Brush::Tile(parse_tile(self.data.names.clone(), tile)?),
+        };
+        Ok(())
     }
 
     pub(crate) fn mode(&mut self, args: &[&str]) -> Result<(), String> {
@@ -250,11 +289,11 @@ impl State {
             "normal" => {
                 self.mode = Mode::Normal;
                 Ok(())
-            },
+            }
             "draw" => {
                 self.mode = Mode::Draw;
                 Ok(())
-            },
+            }
             _ => Err(format!(
                 "Mode {} not found, options are Normal, Draw.",
                 args[0]
@@ -286,7 +325,7 @@ impl State {
                     )
                 }
                 Direction::Down => {
-                    let ny = (self.cursory + distance).min(map.len() - 1);
+                    let ny = (self.cursory + distance).min(map.map.len() - 1);
                     (
                         self.cursorx,
                         ny,
@@ -302,7 +341,7 @@ impl State {
                     )
                 }
                 Direction::Right => {
-                    let nx = (self.cursorx + distance).min(map[0].len() - 1);
+                    let nx = (self.cursorx + distance).min(map.map[0].len() - 1);
                     (
                         nx,
                         self.cursory,
@@ -313,20 +352,22 @@ impl State {
             self.cursorx = nx;
             self.cursory = ny;
             if self.mode == Mode::Draw {
+                let map_clone = map.clone();
                 match self.brush {
                     Brush::Tile(tile) => {
                         for &(i, j) in &positions {
-                            if dot(map, i, j, tile) {
-                                self.modified = true;
-                            }
+                            dot(&mut map.map, i, j, tile);
                         }
                     }
-                    Brush::Add => self.select.extend(positions.iter()),
+                    Brush::Add => map.select.extend(positions.iter()),
                     Brush::Subtract => {
                         for p in positions {
-                            self.select.remove(&p);
+                            map.select.remove(&p);
                         }
                     }
+                }
+                if *map != map_clone {
+                    self.push_undo(map_clone);
                 }
             }
         };
@@ -337,9 +378,13 @@ impl State {
         if let Some(map) = &self.map {
             match parse_direction(args[0])? {
                 Direction::Left => self.move_cursor(Direction::Left, self.cursorx),
-                Direction::Down => self.move_cursor(Direction::Down, map[0].len() - self.cursory),
+                Direction::Down => {
+                    self.move_cursor(Direction::Down, map.map[0].len() - self.cursory)
+                }
                 Direction::Up => self.move_cursor(Direction::Up, self.cursory),
-                Direction::Right => self.move_cursor(Direction::Left, map.len() - self.cursorx),
+                Direction::Right => {
+                    self.move_cursor(Direction::Right, map.map[0].len() - self.cursorx)
+                }
             }
         } else {
             Ok(())
@@ -350,7 +395,7 @@ impl State {
         if let Some(map) = &self.map {
             let i = parse_usize(args[0])?;
             let j = parse_usize(args[1])?;
-            if i < map.len() && j < map[0].len() {
+            if i < map.map.len() && j < map.map[0].len() {
                 self.cursorx = i;
                 self.cursory = j;
                 Ok(())
@@ -364,41 +409,98 @@ impl State {
 
     pub(crate) fn pick(&mut self, _: &[&str]) -> Result<(), String> {
         if let Some(map) = &self.map {
-            self.brush = Brush::Tile(map[self.cursory][self.cursorx]);
+            self.brush = Brush::Tile(map.map[self.cursory][self.cursorx]);
         }
         Ok(())
     }
 
     pub(crate) fn select(&mut self, args: &[&str]) -> Result<(), String> {
-        if let Some(map) = &self.map {
+        if let Some(map) = &mut self.map {
+            let map_clone = map.clone();
             match args[0].to_lowercase().as_str() {
                 "all" => {
-                    self.select = ((0..map.len()).cartesian_product(0..map[0].len())).collect();
+                    map.select =
+                        ((0..map.map.len()).cartesian_product(0..map.map[0].len())).collect();
                     Ok(())
                 }
                 "none" => {
-                    self.select.clear();
+                    map.select.clear();
                     Ok(())
-                },
+                }
                 "invert" => {
-                    self.select = ((0..map.len()).cartesian_product(0..map[0].len()))
-                    .filter(|p| !self.select.contains(p))
-                    .collect();
-                    Ok(
-                        (),
-                    )
+                    map.select = ((0..map.map.len()).cartesian_product(0..map.map[0].len()))
+                        .filter(|p| !map.select.contains(p))
+                        .collect();
+                    Ok(())
+                }
+                arg => match parse_tile(self.data.names.clone(), arg) {
+                    Ok(tile) => {
+                        let positions = (0..map.map.len())
+                            .cartesian_product(0..map.map[0].len())
+                            .filter(|&(i, j)| map.map[i][j] == tile);
+                        match self.brush {
+                            Brush::Add => map.select.extend(positions),
+                            Brush::Subtract => {
+                                for p in positions {
+                                    map.select.remove(&p);
+                                }
+                            }
+                            _ => map.select = positions.collect(),
+                        }
+                        Ok(())
+                    }
+                    _ => {
+                        Err("Invalid selection argument, options are all, none, invert and <tile>.")
+                    }
                 },
-                _ => Err(format!(
-                    "Option {} not found. Options are all, none, invert.",
-                    args[0]
-                )),
+            }?;
+            if map.select != map_clone.select {
+                self.push_undo(map_clone);
+            };
+        }
+        Ok(())
+    }
+
+    fn push_undo(&mut self, map_clone: Map) {
+        self.undo_stack.push(map_clone);
+        self.redo_stack.clear();
+    }
+
+    //TODO: Fuzzy, circle, create
+
+    pub(crate) fn create(&mut self, args: &[&str]) -> Result<(), String> {
+        self.map = Some(Map {
+            map: create(parse_usize(args[0])?, parse_usize(args[1])?, 0),
+            select: HashSet::new(),
+        });
+        Ok(())
+    }
+
+    pub(crate) fn undo(&mut self, _: &[&str]) -> Result<(), String> {
+        match self.undo_stack.pop() {
+            None => Err("Undo stack is empty.".to_owned()),
+            Some(map) => {
+                if let Some(self_map) = &self.map {
+                    self.redo_stack.push(self_map.clone());
+                }
+                self.map = Some(map);
+                Ok(())
             }
-        } else {
-            Ok(())
         }
     }
 
-    //TODO: Fuzzy, Select-tile, circle, square, undo
+    pub(crate) fn redo(&mut self, _: &[&str]) -> Result<(), String> {
+        match self.redo_stack.pop() {
+            None => Err("Redo stack is empty".to_owned()),
+            Some(map) => {
+                if let Some(self_map) = &self.map {
+                    self.undo_stack.push(self_map.clone());
+                }
+                self.map = Some(map);
+                Ok(())
+            }
+        }
+    }
 
     pub(crate) fn parse_command(&mut self, text: &str) -> Result<(), String> {
         if let Some((name, args)) = text.split(" ").collect::<Vec<_>>().split_first() {
@@ -433,7 +535,7 @@ impl State {
         format!(
             "Path: {}{}, Mode: {}, Brush: {}, Cursor: ({},{}), Argument: {}",
             self.path.clone().unwrap_or("[-]".to_owned()),
-            if self.modified { "(*)" } else { "" },
+            if self.modified() { "(*)" } else { "" },
             match self.mode {
                 Mode::Normal => "normal",
                 Mode::Draw => "draw",
@@ -463,7 +565,7 @@ impl State {
             KeyCode::Char(':') => {
                 self.bar = Bar::Input(Input::empty());
                 Ok(())
-            },
+            }
             KeyCode::Char('h') | KeyCode::Left => self.move_with(Direction::Left),
             KeyCode::Char('j') | KeyCode::Down => self.move_with(Direction::Down),
             KeyCode::Char('k') | KeyCode::Up => self.move_with(Direction::Up),
@@ -486,19 +588,22 @@ impl State {
             }
             KeyCode::Char('f') => self.bucket(&[]),
             KeyCode::Char('p') => self.pick(&[]),
+            KeyCode::Char('u') => self.undo(&[]),
+            KeyCode::Char('U') => self.redo(&[]),
             KeyCode::Char(c) => {
                 if let Some(i) = c.to_digit(10) {
                     self.append_argument(i as u8)
                 };
                 Ok(())
-            },
+            }
             _ => Ok(()),
         };
     }
 }
 
-const COMMANDS: [Command; 14] = [
+const COMMANDS: [Command; 18] = [
     Command::new("open", &["o"], 1, 1, State::open),
+    Command::new("open!", &["o!"], 1, 1, State::open_force),
     Command::new("write", &["w"], 0, 1, State::write),
     Command::new("quit", &["q"], 0, 0, State::quit),
     Command::new("quit!", &["q!"], 0, 0, State::quit_force),
@@ -511,5 +616,8 @@ const COMMANDS: [Command; 14] = [
     Command::new("mode", &[], 1, 1, State::mode),
     Command::new("edge", &[], 1, 1, State::edge),
     Command::new("goto", &["g"], 2, 2, State::goto),
-    Command::new("select", &[], 1, 1, State::select),
+    Command::new("select", &["s"], 1, 1, State::select),
+    Command::new("undo", &[], 0, 0, State::undo),
+    Command::new("redo", &[], 0, 0, State::redo),
+    Command::new("create", &["n"], 2, 2, State::create),
 ];
