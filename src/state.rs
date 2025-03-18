@@ -466,7 +466,7 @@ impl State {
         self.redo_stack.clear();
     }
 
-    //TODO: Fuzzy, circle, create
+    //TODO: Fuzzy, circle, box
 
     pub(crate) fn create(&mut self, args: &[&str]) -> Result<(), String> {
         self.map = Some(Map {
