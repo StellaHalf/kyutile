@@ -9,7 +9,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::{
     bar::Input,
-    map::{create, draw_all},
+    map::{create, draw_all, in_bounds, validate},
     parse::parse_tile_data,
 };
 use crate::{
@@ -28,9 +28,9 @@ const CONFIG_PATH: &str = "config/";
 const TILE_PATH: &str = "tiles.toml";
 
 #[derive(PartialEq, Eq)]
-pub(crate) enum Mode {
-    Normal,
-    Draw,
+pub(crate) enum Pen {
+    Up,
+    Down,
 }
 
 pub(crate) enum Brush {
@@ -56,7 +56,7 @@ pub(crate) struct State {
     pub(crate) bar: Bar,
     pub(crate) cursorx: usize,
     pub(crate) cursory: usize,
-    pub(crate) mode: Mode,
+    pub(crate) pen: Pen,
     pub(crate) data: TileData,
     pub(crate) exit: bool,
     pub(crate) argument: usize,
@@ -145,7 +145,7 @@ impl State {
             last_saved: None,
             exit: false,
             path: None,
-            mode: Mode::Normal,
+            pen: Pen::Up,
             cursorx: 0,
             cursory: 0,
             argument: 0,
@@ -164,6 +164,11 @@ impl State {
                 Some(saved) => map.map != *saved,
             },
         }
+    }
+
+    fn push_undo(&mut self, map_clone: Map) {
+        self.undo_stack.push(map_clone);
+        self.redo_stack.clear();
     }
 
     pub(crate) fn append_argument(&mut self, digit: u8) {
@@ -190,13 +195,18 @@ impl State {
         let map =
             parse_map(&read_to_string(path).map_err(|_| format!("Could not open file {}.", path))?)
                 .map_err(|_| "Could not parse map.")?;
-        self.map = Some(Map {
-            map: map.clone(),
-            select: HashSet::new(),
-        });
-        self.path = Some(path.to_owned());
-        self.last_saved = Some(map);
-        Ok(())
+        match validate(&map) {
+            Ok(_) => {
+                self.map = Some(Map {
+                    map: map.clone(),
+                    select: HashSet::new(),
+                });
+                self.path = Some(path.to_owned());
+                self.last_saved = Some(map);
+                Ok(())
+            }
+            Err(err) => Err(format!("Could not validate map: {}", err)),
+        }
     }
 
     pub(crate) fn write(&mut self, args: &[&str]) -> Result<(), String> {
@@ -239,7 +249,7 @@ impl State {
         if let Some(map) = &mut self.map {
             let map_clone = map.clone();
             if let Brush::Tile(tile) = self.brush {
-                if draw_all(&mut map.map, &mut map.select.iter(), tile) {
+                if draw_all(&mut map.map, map.select.clone(), tile) {
                     self.push_undo(map_clone);
                 }
             }
@@ -284,18 +294,18 @@ impl State {
         Ok(())
     }
 
-    pub(crate) fn mode(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn pen(&mut self, args: &[&str]) -> Result<(), String> {
         match args[0].to_lowercase().as_str() {
-            "normal" => {
-                self.mode = Mode::Normal;
+            "up" => {
+                self.pen = Pen::Up;
                 Ok(())
             }
-            "draw" => {
-                self.mode = Mode::Draw;
+            "down" => {
+                self.pen = Pen::Down;
                 Ok(())
             }
             _ => Err(format!(
-                "Mode {} not found, options are Normal, Draw.",
+                "Pen mode {} not found, options are up, down.",
                 args[0]
             )),
         }
@@ -351,7 +361,7 @@ impl State {
             };
             self.cursorx = nx;
             self.cursory = ny;
-            if self.mode == Mode::Draw {
+            if self.pen == Pen::Down {
                 let map_clone = map.clone();
                 match self.brush {
                     Brush::Tile(tile) => {
@@ -359,7 +369,7 @@ impl State {
                             dot(&mut map.map, i, j, tile);
                         }
                     }
-                    Brush::Add => map.select.extend(positions.iter()),
+                    Brush::Add => map.select.extend(positions),
                     Brush::Subtract => {
                         for p in positions {
                             map.select.remove(&p);
@@ -395,7 +405,7 @@ impl State {
         if let Some(map) = &self.map {
             let i = parse_usize(args[0])?;
             let j = parse_usize(args[1])?;
-            if i < map.map.len() && j < map.map[0].len() {
+            if in_bounds(&map.map, i, j) {
                 self.cursorx = i;
                 self.cursory = j;
                 Ok(())
@@ -460,15 +470,76 @@ impl State {
         }
         Ok(())
     }
-
-    fn push_undo(&mut self, map_clone: Map) {
-        self.undo_stack.push(map_clone);
-        self.redo_stack.clear();
-    }
-
     //TODO: Fuzzy, circle, box
 
+    pub(crate) fn r#box(&mut self, args: &[&str]) -> Result<(), String> {
+        if let Some(map) = &mut self.map {
+            let (x0, y0, x1, y1) = (
+                parse_usize(args[0])?,
+                parse_usize(args[1])?,
+                parse_usize(args[2])?,
+                parse_usize(args[3])?,
+            );
+            let fill = if let Some(arg) = args.get(4) {
+                if *arg == "fill" || *arg == "true" {
+                    true
+                } else {
+                    return Err("Invalid argument, the only option is fill (optional).".to_owned());
+                }
+            } else {
+                false
+            };
+            let positions: Vec<_> = if fill {
+                (y0..=y1)
+                    .cartesian_product(x0..=x1)
+                    .filter(|(x, y)| in_bounds(&map.map, *x, *y))
+                    .collect()
+            } else {
+                (y0..=y1)
+                    .map(|x| (x, x0))
+                    .chain((y0..=y1).map(|x| (x, x1)))
+                    .chain((x0 + 1..x1).map(|y| (y0, y)))
+                    .chain((x0 + 1..x1).map(|y| (y1, y)))
+                    .collect()
+            };
+            let map_clone = map.clone();
+            match &self.brush {
+                Brush::Add => {
+                    map.select.extend(positions);
+                    if map.select != map_clone.select {
+                        self.push_undo(map_clone);
+                    }
+                }
+                Brush::Subtract => {
+                    for p in positions {
+                        map.select.remove(&p);
+                    }
+                    if map.select != map_clone.select {
+                        self.push_undo(map_clone);
+                    }
+                }
+                Brush::Tile(tile) => {
+                    if draw_all(&mut map.map, positions, *tile) {
+                        self.push_undo(map_clone);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn create(&mut self, args: &[&str]) -> Result<(), String> {
+        if self.modified() {
+            Err(
+                "Unsaved changes (use :n! to discard them and create a new map or :w to save them)"
+                    .to_owned(),
+            )
+        } else {
+            self.create_force(args)
+        }
+    }
+
+    pub(crate) fn create_force(&mut self, args: &[&str]) -> Result<(), String> {
         self.map = Some(Map {
             map: create(parse_usize(args[0])?, parse_usize(args[1])?, 0),
             select: HashSet::new(),
@@ -533,12 +604,12 @@ impl State {
 
     pub(crate) fn info_bar(&self) -> String {
         format!(
-            "Path: {}{}, Mode: {}, Brush: {}, Cursor: ({},{}), Argument: {}",
+            "Path: {}{}, Pen: {}, Brush: {}, Cursor: ({},{}), Argument: {}",
             self.path.clone().unwrap_or("[-]".to_owned()),
             if self.modified() { "(*)" } else { "" },
-            match self.mode {
-                Mode::Normal => "normal",
-                Mode::Draw => "draw",
+            match self.pen {
+                Pen::Up => "Up",
+                Pen::Down => "Down",
             },
             match self.brush {
                 Brush::Add => "add",
@@ -577,8 +648,8 @@ impl State {
             KeyCode::Char('d') => self.dot(&[]),
             KeyCode::Char('a') => self.brush(&["add"]),
             KeyCode::Char('s') => self.brush(&["subtract"]),
-            KeyCode::Char('i') => self.mode(&["draw"]),
-            KeyCode::Char('I') => self.mode(&["normal"]),
+            KeyCode::Char('i') => self.pen(&["down"]),
+            KeyCode::Char('I') => self.pen(&["up"]),
             KeyCode::Char('A') => self.select(&["all"]),
             KeyCode::Char('S') => self.select(&["none"]),
             KeyCode::Char('F') => self.select(&["invert"]),
@@ -601,7 +672,7 @@ impl State {
     }
 }
 
-const COMMANDS: [Command; 18] = [
+const COMMANDS: [Command; 20] = [
     Command::new("open", &["o"], 1, 1, State::open),
     Command::new("open!", &["o!"], 1, 1, State::open_force),
     Command::new("write", &["w"], 0, 1, State::write),
@@ -613,11 +684,13 @@ const COMMANDS: [Command; 18] = [
     Command::new("bucket", &[], 0, 0, State::bucket),
     Command::new("move", &[], 1, 2, State::r#move),
     Command::new("pick", &[], 0, 0, State::pick),
-    Command::new("mode", &[], 1, 1, State::mode),
+    Command::new("pen", &[], 1, 1, State::pen),
     Command::new("edge", &[], 1, 1, State::edge),
     Command::new("goto", &["g"], 2, 2, State::goto),
     Command::new("select", &["s"], 1, 1, State::select),
     Command::new("undo", &[], 0, 0, State::undo),
     Command::new("redo", &[], 0, 0, State::redo),
     Command::new("create", &["n"], 2, 2, State::create),
+    Command::new("create!", &["n!"], 2, 2, State::create_force),
+    Command::new("box", &[], 4, 5, State::r#box),
 ];

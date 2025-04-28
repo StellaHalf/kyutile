@@ -12,36 +12,71 @@ use ratatui::{
 
 use crate::state::{Bar, State};
 
+const SELECT_COLOR: Color = Color::Rgb(127, 127, 255);
+const CURSOR_COLOR: Color = Color::Rgb(255, 0, 0);
+
 impl State {
+    fn pixel(&self, x: usize, y: usize) -> Option<Paragraph> {
+        match &self.map {
+            Some(map) => {
+                if x < map.map[0].len() + 2 && y < map.map.len() + 2 {
+                    Some(
+                        match (
+                            x == 0,
+                            y == 0,
+                            x == map.map[0].len() + 1,
+                            y == map.map.len() + 1,
+                        ) {
+                            (true, true, _, _) => Paragraph::new("\u{250c}\u{2500}"),
+                            (true, _, _, true) => Paragraph::new("\u{2514}\u{2500}"),
+                            (_, true, true, _) => Paragraph::new("\u{2500}\u{2510}"),
+                            (_, _, true, true) => Paragraph::new("\u{2500}\u{2518}"),
+                            (false, true, false, _) | (false, _, false, true) => {
+                                Paragraph::new("\u{2500}\u{2500}")
+                            }
+                            (true, false, _, false) => Paragraph::new("\u{2502} "),
+                            (_, false, true, false) => Paragraph::new(" \u{2502}"),
+                            _ => {
+                                let j = x - 1;
+                                let i = y - 1;
+                                let select = map.select.contains(&(i, j));
+                                Paragraph::new(if j == self.cursorx && i == self.cursory {
+                                    "»«"
+                                } else if select {
+                                    "╲╲"
+                                } else {
+                                    "  "
+                                })
+                                .bg(Color::from_u32(self.data.colors[&map.map[i][j]]))
+                                .fg(if select {
+                                    SELECT_COLOR
+                                } else {
+                                    CURSOR_COLOR
+                                })
+                            }
+                        },
+                    )
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+
     fn render_map(&self, area: Rect, buf: &mut Buffer) {
         match &self.map {
             Some(map) => {
-                for i in 0..map.map.len() {
-                    for j in 0..map.map[0].len() {
-                        let cursor = j == self.cursorx && i == self.cursory;
-                        let select = map.select.contains(&(i, j));
-                        Paragraph::new(if cursor {
-                            "◀▶"
-                        } else if select {
-                            "╱╱"
-                        } else {
-                            "  "
-                        })
-                        .bg(Color::from_u32(self.data.colors[&map.map[i][j]]))
-                        .fg(if select {
-                            Color::Rgb(0, 0, 255)
-                        } else {
-                            Color::Rgb(255, 0, 0)
-                        })
-                        .render(
-                            Rect::new(area.x + 2 * j as u16, area.y + i as u16, 2, 1),
-                            buf,
-                        );
+                for x in 0..(area.width / 2).min(map.map[0].len() as u16 + 2) {
+                    for y in 0..area.height.min(map.map.len() as u16 + 2) {
+                        if let Some(pixel) = self.pixel(x as usize, y as usize) {
+                            pixel.render(Rect::new(area.x + 2 * x, area.y + y, 2, 1), buf);
+                        }
                     }
                 }
             }
             None => Paragraph::new(
-                "No map loaded. Use :o <path> to load a map, or :c <options> to create one.",
+                "No map loaded. Use :o <path> to load a map, or :n <options> to create one.",
             )
             .render(area, buf),
         }
