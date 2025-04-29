@@ -1,3 +1,5 @@
+use std::iter::once;
+
 pub(crate) fn validate(map: &[Vec<i32>]) -> Result<(), String> {
     if map.is_empty() {
         Err("Maps cannot be empty.".to_owned())
@@ -32,17 +34,12 @@ where
 }
 
 pub(crate) fn create(x: usize, y: usize, tile: i32) -> Vec<Vec<i32>> {
-    let mut row = Vec::new();
-    for _ in 0..x {
-        row.push(tile)
-    }
-    let mut map = Vec::new();
-    for _ in 0..y {
-        map.push(row.clone())
-    }
-    map
+    once(once(tile).cycle().take(y).collect())
+        .cycle()
+        .take(x)
+        .collect()
 }
 
-pub(crate) fn in_bounds(map: &[Vec<i32>], x: usize, y: usize) -> bool {
-    x < map.len() && y < map[0].len()
+pub(crate) fn in_bounds(lx: usize, ly: usize, x: usize, y: usize) -> bool {
+    x < lx && y < ly
 }

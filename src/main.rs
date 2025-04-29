@@ -7,20 +7,20 @@ use std::{
 use state::State;
 
 mod bar;
+mod files;
 mod map;
-mod parse;
 mod state;
+mod tiles;
 mod ui;
 
-const VERSION: &str = "1.0";
-const HELP: &str = "Help!";
+const HELP: &str = "Usage: kyutile --help|--version|<path>";
 
 fn main() {
     let args: Vec<_> = env::args().skip(1).collect();
     if args.contains(&"--help".to_owned()) || args.contains(&"-h".to_owned()) {
         println!("{}", HELP)
     } else if args.contains(&"--version".to_owned()) | args.contains(&"-V".to_owned()) {
-        println!("kyutile {}", VERSION)
+        println!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
     } else {
         match launch(&args.first()) {
             Ok(_) => (),
