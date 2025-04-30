@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{read_to_string, write},
     io,
 };
@@ -9,7 +9,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::{
     bar::Input,
-    map::{create, draw_all, in_bounds, validate},
+    map::{self, create, draw_all, in_bounds, validate},
     tiles::TILES,
 };
 use crate::{
@@ -442,7 +442,6 @@ impl State {
         };
         Ok(())
     }
-    //TODO: Fuzzy, circle
 
     pub(crate) fn draw_shape<F, I>(&mut self, args: &[&str], shape: F) -> Result<(), String>
     where
@@ -478,6 +477,46 @@ impl State {
         Ok(())
     }
 
+    pub(crate) fn fuzzy(&mut self, args: &[&str]) -> Result<(), String> {
+        let map = self.map.map.clone();
+        let cursorx = self.cursorx;
+        let cursory = self.cursory;
+        self.draw_shape(args, |args| {
+            let mut reached = HashSet::new();
+            let mut frontier = HashSet::new();
+            let mut new_frontier = HashSet::new();
+            frontier.insert((cursory, cursorx));
+            let tile = map[cursory][cursorx];
+            let mut i = match args.get(0) {
+                Some(arg) => parse_usize(arg)? as isize,
+                None => -1,
+            };
+            while !frontier.is_empty() && i != 0 {
+                i -= 1;
+                reached.extend(&frontier);
+                new_frontier.clear();
+                for (i, j) in frontier.clone() {
+                    for (di, dj) in vec![(-1, 0), (0, -1), (1, 0), (0, 1)] {
+                        let ni = i as isize + di;
+                        let nj = j as isize + dj;
+                        if ni >= 0
+                            && ni < map.len() as isize
+                            && nj >= 0
+                            && nj < map[0].len() as isize
+                            && !reached.contains(&(ni as usize, nj as usize))
+                            && map[ni as usize][nj as usize] == tile
+                        {
+                            new_frontier.insert((ni as usize, nj as usize));
+                        }
+                    }
+                    frontier.clear();
+                    frontier.extend(new_frontier.clone());
+                }
+            }
+            Ok(reached)
+        })
+    }
+
     pub(crate) fn r#box(&mut self, args: &[&str]) -> Result<(), String> {
         self.draw_shape::<_, Vec<_>>(args, |args| {
             let (x0, y0, x1, y1) = (
@@ -508,7 +547,7 @@ impl State {
         })
     }
 
-    //bresenham's algorithm, adapted from http://members.chello.at/~easyfilter/bresenham.html
+    //adapted from http://members.chello.at/~easyfilter/bresenham.html
     pub(crate) fn ellipse(&mut self, args: &[&str]) -> Result<(), String> {
         self.draw_shape(args, |args| {
             let (x0, y0, x1, y1) = (
@@ -563,6 +602,7 @@ impl State {
             self.push_undo(self.map.clone());
             self.map = new_map;
         }
+        self.reset_cursor();
         Ok(())
     }
 
@@ -603,7 +643,12 @@ impl State {
     }
 
     pub(crate) fn parse_command(&mut self, text: &str) -> Result<(), String> {
-        if let Some((name, args)) = text.split(" ").collect::<Vec<_>>().split_first() {
+        if let Some((name, args)) = text
+            .split(" ")
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .split_first()
+        {
             match COMMANDS
                 .iter()
                 .find(|c| c.name == *name || c.aliases.contains(name))
@@ -701,7 +746,7 @@ impl State {
     }
 }
 
-const COMMANDS: [Command; 20] = [
+const COMMANDS: [Command; 21] = [
     Command::new("open", &["o"], 1, 1, State::open),
     Command::new("open!", &["o!"], 1, 1, State::open_force),
     Command::new("write", &["w"], 0, 1, State::write),
@@ -722,4 +767,5 @@ const COMMANDS: [Command; 20] = [
     Command::new("create", &["n"], 2, 2, State::create),
     Command::new("box", &["b"], 4, 5, State::r#box),
     Command::new("ellipse", &["e"], 4, 5, State::ellipse),
+    Command::new("fuzzy", &["f"], 0, 1, State::fuzzy),
 ];
