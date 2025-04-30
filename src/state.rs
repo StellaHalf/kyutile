@@ -9,7 +9,7 @@ use ratatui::crossterm::event::KeyCode;
 
 use crate::{
     bar::Input,
-    map::{self, create, draw_all, in_bounds, validate},
+    map::{create, draw_all, in_bounds, validate},
     tiles::TILES,
 };
 use crate::{
@@ -42,19 +42,26 @@ pub(crate) struct Map {
     pub(crate) select: HashSet<(usize, usize)>,
 }
 
+pub(crate) struct Clipboard {
+    pub(crate) content: HashMap<(usize, usize), i32>,
+    pub(crate) offsetx: usize,
+    pub(crate) offsety: usize,
+}
+
 pub(crate) struct State {
-    pub(crate) map: Map,
-    pub(crate) last_saved: Option<Vec<Vec<i32>>>,
+    pub(crate) argument: usize,
     pub(crate) bar: Bar,
+    pub(crate) brush: Brush,
+    pub(crate) clipboard: Option<Clipboard>,
     pub(crate) cursorx: usize,
     pub(crate) cursory: usize,
-    pub(crate) pen: Pen,
     pub(crate) exit: bool,
-    pub(crate) argument: usize,
+    pub(crate) last_saved: Option<Vec<Vec<i32>>>,
+    pub(crate) map: Map,
     pub(crate) path: Option<String>,
-    pub(crate) brush: Brush,
-    undo_stack: Vec<Map>,
+    pub(crate) pen: Pen,
     redo_stack: Vec<Map>,
+    undo_stack: Vec<Map>,
 }
 
 struct Command {
@@ -135,6 +142,7 @@ impl State {
                 map: create(11, 11, 0),
                 select: HashSet::new(),
             },
+            clipboard: None,
             last_saved: None,
             exit: false,
             path: None,
@@ -556,6 +564,15 @@ impl State {
                 parse_usize(args[2])? as isize,
                 parse_usize(args[3])? as isize,
             );
+            let fill = if let Some(arg) = args.get(4) {
+                if *arg == "fill" || *arg == "true" {
+                    true
+                } else {
+                    return Err("Invalid argument, the only option is fill (optional)".to_owned());
+                }
+            } else {
+                false
+            };
             let mut positions = Vec::new();
             let a = (x1 - x0).abs();
             let b = (y1 - y0).abs();
@@ -574,7 +591,15 @@ impl State {
                 let x1u = x1 as usize;
                 let y0u = y0 as usize;
                 let y1u = y1 as usize;
-                positions.extend_from_slice(&[(x1u, y0u), (x0u, y0u), (x0u, y1u), (x1u, y1u)]);
+                if fill {
+                    positions.extend(
+                        (x0u..=x1u)
+                            .map(|x| (x, y0u))
+                            .chain((x0u..=x1u).map(|x| (x, y1u))),
+                    )
+                } else {
+                    positions.extend_from_slice(&[(x1u, y0u), (x0u, y0u), (x0u, y1u), (x1u, y1u)])
+                };
                 e2 = 2 * e;
                 if e2 <= dy {
                     y0 += 1;
@@ -700,6 +725,50 @@ impl State {
         )
     }
 
+    pub(crate) fn copy(&mut self, _: &[&str]) -> Result<(), String> {
+        self.clipboard = Some(Clipboard {
+            content: self
+                .map
+                .select
+                .iter()
+                .map(|(i, j)| ((*i, *j), self.map.map[*i][*j]))
+                .collect(),
+            offsetx: self.cursorx,
+            offsety: self.cursory,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn paste(&mut self, _: &[&str]) -> Result<(), String> {
+        let ly = self.map.map[0].len();
+        let lx = self.map.map.len();
+        let map_clone = self.map.clone();
+        if let Some(clipboard) = &self.clipboard {
+            for (i, j, tile) in clipboard
+                .content
+                .iter()
+                .map(|((i, j), tile)| {
+                    (
+                        (*i as isize + self.cursory as isize - (clipboard.offsety as isize))
+                            as usize,
+                        (*j as isize + self.cursorx as isize - (clipboard.offsetx as isize))
+                            as usize,
+                        tile,
+                    )
+                })
+                .filter(|(i, j, _)| in_bounds(lx, ly, *i, *j))
+            {
+                self.map.map[i][j] = *tile;
+            }
+            if self.map.map != map_clone.map {
+                self.push_undo(map_clone);
+            }
+            Ok(())
+        } else {
+            Err("Clipboard is empty".to_owned())
+        }
+    }
+
     fn move_with(&mut self, direction: Direction) -> Result<(), String> {
         self.move_cursor(direction, self.argument.max(1))?;
         self.argument = 0;
@@ -735,6 +804,8 @@ impl State {
             KeyCode::Char('p') => self.pick(&[]),
             KeyCode::Char('u') => self.undo(&[]),
             KeyCode::Char('U') => self.redo(&[]),
+            KeyCode::Char('o') => self.copy(&[]),
+            KeyCode::Char('O') => self.paste(&[]),
             KeyCode::Char(c) => {
                 if let Some(i) = c.to_digit(10) {
                     self.append_argument(i as u8)
@@ -746,7 +817,7 @@ impl State {
     }
 }
 
-const COMMANDS: [Command; 21] = [
+const COMMANDS: [Command; 23] = [
     Command::new("open", &["o"], 1, 1, State::open),
     Command::new("open!", &["o!"], 1, 1, State::open_force),
     Command::new("write", &["w"], 0, 1, State::write),
@@ -768,4 +839,6 @@ const COMMANDS: [Command; 21] = [
     Command::new("box", &["b"], 4, 5, State::r#box),
     Command::new("ellipse", &["e"], 4, 5, State::ellipse),
     Command::new("fuzzy", &["f"], 0, 1, State::fuzzy),
+    Command::new("copy", &[], 0, 0, State::copy),
+    Command::new("paste", &[], 0, 0, State::paste),
 ];
