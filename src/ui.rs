@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::{
-    state::{Bar, State},
+    state::{Bar, CommandResult, State},
     tiles::TILES,
 };
 
@@ -102,7 +102,10 @@ impl State {
                     .fg(Color::Red)
                     .render(bar_area, buf);
             }
-            _ => (),
+            Bar::Ok(message) => {
+                Paragraph::new(message.as_str()).render(bar_area, buf);
+            }
+            Bar::Closed => (),
         }
     }
 
@@ -127,16 +130,16 @@ impl State {
                 KeyCode::Esc => self.bar = Bar::Closed,
                 KeyCode::Enter => {
                     let text = input.text();
-                    if let Err(err) = self.parse_command(&text) {
-                        self.bar = Bar::Err(err)
-                    } else {
-                        self.bar = Bar::Closed
+                    match self.parse_command(&text) {
+                        CommandResult::Err(err) => self.bar = Bar::Err(err),
+                        CommandResult::Ok(message) => self.bar = Bar::Ok(message),
+                        CommandResult::None => self.bar = Bar::Closed,
                     }
                 }
                 _ => (),
             },
             Bar::Closed => self.receive_key_closed(code),
-            Bar::Err(_) => {
+            Bar::Err(_) | Bar::Ok(_) => {
                 self.bar = Bar::Closed;
                 self.receive_key_closed(code);
             }

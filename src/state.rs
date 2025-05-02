@@ -22,6 +22,13 @@ pub(crate) enum Bar {
     Closed,
     Input(Input),
     Err(String),
+    Ok(String),
+}
+
+pub(crate) enum CommandResult {
+    None,
+    Err(String),
+    Ok(String),
 }
 
 #[derive(PartialEq, Eq)]
@@ -43,7 +50,7 @@ pub(crate) struct Map {
 }
 
 pub(crate) struct Clipboard {
-    pub(crate) content: HashMap<(usize, usize), i32>,
+    pub(crate) content: HashMap<(isize, isize), i32>,
     pub(crate) offsetx: usize,
     pub(crate) offsety: usize,
 }
@@ -69,7 +76,7 @@ struct Command {
     aliases: &'static [&'static str],
     argsmin: usize,
     argsmax: usize,
-    function: fn(&mut State, &[&str]) -> Result<(), String>,
+    function: fn(&mut State, &[&str]) -> CommandResult,
 }
 
 impl Command {
@@ -78,7 +85,7 @@ impl Command {
         aliases: &'static [&'static str],
         argsmin: usize,
         argsmax: usize,
-        function: fn(&mut State, &[&str]) -> Result<(), String>,
+        function: fn(&mut State, &[&str]) -> CommandResult,
     ) -> Self {
         Command {
             name,
@@ -178,9 +185,9 @@ impl State {
         .unwrap_or(self.argument)
     }
 
-    pub(crate) fn open(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn open(&mut self, args: &[&str]) -> CommandResult {
         if self.modified() {
-            Err(
+            CommandResult::Err(
                 "Unsaved changes (use :o! to discard them and open another file or :w to save them).".to_owned(),
             )
         } else {
@@ -188,11 +195,15 @@ impl State {
         }
     }
 
-    fn open_force(&mut self, args: &[&str]) -> Result<(), String> {
+    fn open_force(&mut self, args: &[&str]) -> CommandResult {
         let path = args[0];
-        let map =
-            parse_map(&read_to_string(path).map_err(|_| format!("Could not open file {}.", path))?)
-                .map_err(|_| "Could not parse map.")?;
+        let map = match parse_map(match &read_to_string(path) {
+            Ok(bytes) => bytes,
+            Err(_) => return CommandResult::Err(format!("Could not open file {}.", path)),
+        }) {
+            Ok(map) => map,
+            Err(_) => return CommandResult::Err("Could not parse map.".to_owned()),
+        };
         match validate(&map) {
             Ok(_) => {
                 self.map = Map {
@@ -201,60 +212,62 @@ impl State {
                 };
                 self.path = Some(path.to_owned());
                 self.last_saved = Some(map);
-                Ok(())
+                CommandResult::Ok(format!("Opened {}.", path))
             }
-            Err(err) => Err(format!("Could not validate map: {}", err)),
+            Err(err) => CommandResult::Err(format!("Could not validate map: {}", err)),
         }
     }
 
-    pub(crate) fn write(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn write(&mut self, args: &[&str]) -> CommandResult {
         if let Some(&path) = args.first() {
             self.path = Some(path.to_owned())
         }
         match &self.path {
-            None => Err("No path set (use :w <path>).".to_owned()),
+            None => CommandResult::Err("No path set (use :w <path>).".to_owned()),
             Some(path) => {
-                write(path, export_map(&self.map.map))
-                    .map_err(|_| format!("Could not write to file {}.", path))?;
+                write(path, export_map(&self.map.map)).unwrap();
                 self.last_saved = Some(self.map.map.clone());
-                Ok(())
+                CommandResult::Ok(format!("Written to {}.", path))
             }
         }
     }
 
-    pub(crate) fn quit(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn quit(&mut self, _: &[&str]) -> CommandResult {
         if self.modified() {
-            Err(
+            CommandResult::Err(
                 "Unsaved changes (use :q! to discard them and quit or :wq to save and quit)."
                     .to_owned(),
             )
         } else {
             self.exit = true;
-            Ok(())
+            CommandResult::None
         }
     }
 
-    pub(crate) fn quit_force(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn quit_force(&mut self, _: &[&str]) -> CommandResult {
         self.exit = true;
-        Ok(())
+        CommandResult::None
     }
 
-    pub(crate) fn write_quit(&mut self, args: &[&str]) -> Result<(), String> {
-        self.write(args)?;
-        self.quit(&[])?;
-        Ok(())
+    pub(crate) fn write_quit(&mut self, args: &[&str]) -> CommandResult {
+        if let CommandResult::Err(err) = self.write(args) {
+            CommandResult::Err(err)
+        } else {
+            self.quit_force(&[]);
+            CommandResult::None
+        }
     }
-    pub(crate) fn bucket(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn bucket(&mut self, _: &[&str]) -> CommandResult {
         let map_clone = self.map.clone();
         if let Brush::Tile(tile) = self.brush {
             if draw_all(&mut self.map.map, self.map.select.clone(), tile) {
                 self.push_undo(map_clone);
             }
         }
-        Ok(())
+        CommandResult::None
     }
 
-    pub(crate) fn dot(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn dot(&mut self, _: &[&str]) -> CommandResult {
         let map_clone = self.map.clone();
         match self.brush {
             Brush::Tile(tile) => {
@@ -273,10 +286,10 @@ impl State {
                 }
             }
         }
-        Ok(())
+        CommandResult::None
     }
 
-    pub(crate) fn brush(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn brush(&mut self, args: &[&str]) -> CommandResult {
         match args[0].to_lowercase().as_str() {
             "add" => {
                 self.brush = Brush::Add;
@@ -284,39 +297,52 @@ impl State {
             "subtract" => {
                 self.brush = Brush::Subtract;
             }
-            tile => self.brush = Brush::Tile(parse_tile(tile)?),
+            tile => {
+                self.brush = Brush::Tile(match parse_tile(tile) {
+                    Ok(tile) => tile,
+                    Err(err) => return CommandResult::Err(err),
+                })
+            }
         };
-        Ok(())
+        CommandResult::None
     }
 
-    pub(crate) fn pen(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn pen(&mut self, args: &[&str]) -> CommandResult {
         match args[0].to_lowercase().as_str() {
             "up" => {
                 self.pen = Pen::Up;
-                Ok(())
+                CommandResult::None
             }
             "down" => {
                 self.pen = Pen::Down;
-                Ok(())
+                CommandResult::None
             }
-            _ => Err(format!(
+            _ => CommandResult::Err(format!(
                 "Pen mode {} not found, options are up, down.",
                 args[0]
             )),
         }
     }
 
-    pub(crate) fn r#move(&mut self, args: &[&str]) -> Result<(), String> {
-        let distance = args
-            .get(1)
-            .map(|s| parse_usize(s))
-            .transpose()?
-            .unwrap_or(1);
-        self.move_cursor(parse_direction(args[0])?, distance)?;
-        Ok(())
+    pub(crate) fn r#move(&mut self, args: &[&str]) -> CommandResult {
+        let distance = match args.get(1) {
+            None => 1,
+            Some(arg) => match parse_usize(arg) {
+                Ok(distance) => distance,
+                Err(err) => return CommandResult::Err(err),
+            },
+        };
+        self.move_cursor(
+            match parse_direction(args[0]) {
+                Ok(direction) => direction,
+                Err(err) => return CommandResult::Err(err),
+            },
+            distance,
+        );
+        CommandResult::None
     }
 
-    fn move_cursor(&mut self, direction: Direction, distance: usize) -> Result<(), String> {
+    fn move_cursor(&mut self, direction: Direction, distance: usize) {
         let (nx, ny, positions) = match direction {
             Direction::Left => {
                 let nx = (self.cursorx as isize - distance as isize).max(0) as usize;
@@ -374,11 +400,13 @@ impl State {
                 self.push_undo(map_clone);
             }
         }
-        Ok(())
     }
 
-    pub(crate) fn edge(&mut self, args: &[&str]) -> Result<(), String> {
-        match parse_direction(args[0])? {
+    pub(crate) fn edge(&mut self, args: &[&str]) -> CommandResult {
+        match match parse_direction(args[0]) {
+            Ok(direction) => direction,
+            Err(err) => return CommandResult::Err(err),
+        } {
             Direction::Left => self.move_cursor(Direction::Left, self.cursorx),
             Direction::Down => {
                 self.move_cursor(Direction::Down, self.map.map[0].len() - self.cursory)
@@ -387,44 +415,51 @@ impl State {
             Direction::Right => {
                 self.move_cursor(Direction::Right, self.map.map[0].len() - self.cursorx)
             }
-        }
+        };
+        CommandResult::None
     }
 
-    pub(crate) fn goto(&mut self, args: &[&str]) -> Result<(), String> {
-        let i = parse_usize(args[0])?;
-        let j = parse_usize(args[1])?;
+    pub(crate) fn goto(&mut self, args: &[&str]) -> CommandResult {
+        let i = match parse_usize(args[0]) {
+            Ok(i) => i,
+            Err(err) => return CommandResult::Err(err),
+        };
+        let j = match parse_usize(args[1]) {
+            Ok(j) => j,
+            Err(err) => return CommandResult::Err(err),
+        };
         if in_bounds(self.map.map.len(), self.map.map[0].len(), i, j) {
             self.cursorx = i;
             self.cursory = j;
-            Ok(())
+            CommandResult::None
         } else {
-            Err("Out of bounds.".to_owned())
+            CommandResult::Err("Out of bounds.".to_owned())
         }
     }
 
-    pub(crate) fn pick(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn pick(&mut self, _: &[&str]) -> CommandResult {
         self.brush = Brush::Tile(self.map.map[self.cursory][self.cursorx]);
-        Ok(())
+        CommandResult::None
     }
 
-    pub(crate) fn select(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn select(&mut self, args: &[&str]) -> CommandResult {
         let map_clone = self.map.clone();
         match args[0].to_lowercase().as_str() {
             "all" => {
                 self.map.select =
                     ((0..self.map.map.len()).cartesian_product(0..self.map.map[0].len())).collect();
-                Ok(())
+                CommandResult::None
             }
             "none" => {
                 self.map.select.clear();
-                Ok(())
+                CommandResult::None
             }
             "invert" => {
                 self.map.select = ((0..self.map.map.len())
                     .cartesian_product(0..self.map.map[0].len()))
                 .filter(|p| !self.map.select.contains(p))
                 .collect();
-                Ok(())
+                CommandResult::None
             }
             arg => match parse_tile(arg) {
                 Ok(tile) => {
@@ -440,26 +475,34 @@ impl State {
                         }
                         _ => self.map.select = positions.collect(),
                     }
-                    Ok(())
+                    CommandResult::None
                 }
-                _ => Err("Invalid selection argument, options are all, none, invert and <tile>."),
+                _ => {
+                    return CommandResult::Err(
+                        "Invalid selection argument, options are all, none, invert and <tile>."
+                            .to_owned(),
+                    );
+                }
             },
-        }?;
+        };
         if self.map.select != map_clone.select {
             self.push_undo(map_clone);
         };
-        Ok(())
+        CommandResult::None
     }
 
-    pub(crate) fn draw_shape<F, I>(&mut self, args: &[&str], shape: F) -> Result<(), String>
+    pub(crate) fn draw_shape<F, I>(&mut self, args: &[&str], shape: F) -> CommandResult
     where
         F: FnOnce(&[&str]) -> Result<I, String>,
         I: IntoIterator<Item = (usize, usize)>,
     {
         let (lx, ly) = (self.map.map.len(), self.map.map[0].len());
-        let positions = shape(args)?
-            .into_iter()
-            .filter(|(x, y)| in_bounds(lx, ly, *x, *y));
+        let positions = match shape(args) {
+            Ok(i) => i,
+            Err(err) => return CommandResult::Err(err),
+        }
+        .into_iter()
+        .filter(|(x, y)| in_bounds(lx, ly, *x, *y));
         let map_clone = self.map.clone();
         match &self.brush {
             Brush::Add => {
@@ -482,10 +525,10 @@ impl State {
                 }
             }
         }
-        Ok(())
+        CommandResult::None
     }
 
-    pub(crate) fn fuzzy(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn fuzzy(&mut self, args: &[&str]) -> CommandResult {
         let map = self.map.map.clone();
         let cursorx = self.cursorx;
         let cursory = self.cursory;
@@ -525,7 +568,7 @@ impl State {
         })
     }
 
-    pub(crate) fn r#box(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn r#box(&mut self, args: &[&str]) -> CommandResult {
         self.draw_shape::<_, Vec<_>>(args, |args| {
             let (x0, y0, x1, y1) = (
                 parse_usize(args[0])?,
@@ -556,7 +599,7 @@ impl State {
     }
 
     //adapted from http://members.chello.at/~easyfilter/bresenham.html
-    pub(crate) fn ellipse(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn ellipse(&mut self, args: &[&str]) -> CommandResult {
         self.draw_shape(args, |args| {
             let (x0, y0, x1, y1) = (
                 parse_usize(args[0])? as isize,
@@ -618,9 +661,17 @@ impl State {
         })
     }
 
-    pub(crate) fn create(&mut self, args: &[&str]) -> Result<(), String> {
+    pub(crate) fn create(&mut self, args: &[&str]) -> CommandResult {
+        let y = match parse_usize(args[1]) {
+            Ok(y) => y,
+            Err(err) => return CommandResult::Err(err),
+        };
+        let x = match parse_usize(args[0]) {
+            Ok(x) => x,
+            Err(err) => return CommandResult::Err(err),
+        };
         let new_map = Map {
-            map: create(parse_usize(args[1])?, parse_usize(args[0])?, 0),
+            map: create(y, x, 0),
             select: HashSet::new(),
         };
         if self.map != new_map {
@@ -628,7 +679,7 @@ impl State {
             self.map = new_map;
         }
         self.reset_cursor();
-        Ok(())
+        CommandResult::Ok(format!("Created empty {}x{} map.", x, y))
     }
 
     pub(crate) fn reset_cursor(&mut self) {
@@ -643,31 +694,31 @@ impl State {
         }
     }
 
-    pub(crate) fn undo(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn undo(&mut self, _: &[&str]) -> CommandResult {
         match self.undo_stack.pop() {
-            None => Err("Undo stack is empty.".to_owned()),
+            None => CommandResult::Err("Undo stack is empty.".to_owned()),
             Some(map) => {
                 self.redo_stack.push(self.map.clone());
                 self.map = map;
                 self.reset_cursor();
-                Ok(())
+                CommandResult::None
             }
         }
     }
 
-    pub(crate) fn redo(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn redo(&mut self, _: &[&str]) -> CommandResult {
         match self.redo_stack.pop() {
-            None => Err("Redo stack is empty".to_owned()),
+            None => CommandResult::Err("Redo stack is empty".to_owned()),
             Some(map) => {
                 self.undo_stack.push(self.map.clone());
                 self.map = map;
                 self.reset_cursor();
-                Ok(())
+                CommandResult::None
             }
         }
     }
 
-    pub(crate) fn parse_command(&mut self, text: &str) -> Result<(), String> {
+    pub(crate) fn parse_command(&mut self, text: &str) -> CommandResult {
         if let Some((name, args)) = text
             .split(" ")
             .filter(|s| !s.is_empty())
@@ -678,12 +729,12 @@ impl State {
                 .iter()
                 .find(|c| c.name == *name || c.aliases.contains(name))
             {
-                None => Err(format!("Command {} not found.", name)),
+                None => CommandResult::Err(format!("Command {} not found.", name)),
                 Some(command) => {
                     if args.len() >= command.argsmin && args.len() <= command.argsmax {
                         (command.function)(self, args)
                     } else {
-                        Err(format!(
+                        CommandResult::Err(format!(
                             "Incorrect number of arguments for {}: expected {}, found {}.",
                             command.name,
                             if command.argsmin == command.argsmax {
@@ -697,7 +748,7 @@ impl State {
                 }
             }
         } else {
-            Ok(())
+            CommandResult::None
         }
     }
 
@@ -725,21 +776,24 @@ impl State {
         )
     }
 
-    pub(crate) fn copy(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn copy(&mut self, _: &[&str]) -> CommandResult {
         self.clipboard = Some(Clipboard {
             content: self
                 .map
                 .select
                 .iter()
-                .map(|(i, j)| ((*i, *j), self.map.map[*i][*j]))
+                .map(|(i, j)| ((*i as isize, *j as isize), self.map.map[*i][*j]))
                 .collect(),
             offsetx: self.cursorx,
             offsety: self.cursory,
         });
-        Ok(())
+        CommandResult::Ok(format!(
+            "Copied {} tiles to clipboard.",
+            self.map.select.len()
+        ))
     }
 
-    pub(crate) fn paste(&mut self, _: &[&str]) -> Result<(), String> {
+    pub(crate) fn paste(&mut self, _: &[&str]) -> CommandResult {
         let ly = self.map.map[0].len();
         let lx = self.map.map.len();
         let map_clone = self.map.clone();
@@ -763,61 +817,163 @@ impl State {
             if self.map.map != map_clone.map {
                 self.push_undo(map_clone);
             }
-            Ok(())
+            CommandResult::None
         } else {
-            Err("Clipboard is empty".to_owned())
+            CommandResult::Err("Clipboard is empty".to_owned())
         }
     }
 
-    fn move_with(&mut self, direction: Direction) -> Result<(), String> {
-        self.move_cursor(direction, self.argument.max(1))?;
+    pub(crate) fn clipboard(&mut self, args: &[&str]) -> CommandResult {
+        if let Some(clipboard) = &mut self.clipboard {
+            match (args[0], args[1]) {
+                ("rotate", "anticlockwise") => {
+                    clipboard.content = clipboard
+                        .content
+                        .iter()
+                        .map(|((i, j), tile)| {
+                            (
+                                (
+                                    *j - clipboard.offsetx as isize + clipboard.offsety as isize,
+                                    -i + clipboard.offsetx as isize + clipboard.offsety as isize,
+                                ),
+                                *tile,
+                            )
+                        })
+                        .collect();
+                    CommandResult::Ok("Rotated the clipboard anticlockwise".to_owned())
+                }
+                ("rotate", "clockwise") => {
+                    clipboard.content = clipboard
+                        .content
+                        .iter()
+                        .map(|((i, j), tile)| {
+                            (
+                                (
+                                    -j + clipboard.offsetx as isize + clipboard.offsety as isize,
+                                    *i - clipboard.offsetx as isize + clipboard.offsety as isize,
+                                ),
+                                *tile,
+                            )
+                        })
+                        .collect();
+                    CommandResult::Ok("Rotated the clipboard clockwise".to_owned())
+                }
+                ("reflect", "horizontal") => {
+                    clipboard.content = clipboard
+                        .content
+                        .iter()
+                        .map(|((i, j), tile)| ((*i, -j + 2 * clipboard.offsetx as isize), *tile))
+                        .collect();
+                    CommandResult::Ok("Reflected the clipboard horizontally".to_owned())
+                }
+                ("reflect", "vertical") => {
+                    clipboard.content = clipboard
+                        .content
+                        .iter()
+                        .map(|((i, j), tile)| ((-i + 2 * clipboard.offsety as isize, *j), *tile))
+                        .collect();
+                    CommandResult::Ok("Reflected the clipboard vertically.".to_owned())
+                }
+                _ => CommandResult::Err(
+                    "Invalid options, the only options are rotate|reflect horizontal|vertical."
+                        .to_owned(),
+                ),
+            }
+        } else {
+            CommandResult::None
+        }
+    }
+
+    fn move_with(&mut self, direction: Direction) -> CommandResult {
+        self.move_cursor(direction, self.argument.max(1));
         self.argument = 0;
-        Ok(())
+        CommandResult::None
     }
     pub(crate) fn receive_key_closed(&mut self, code: KeyCode) {
-        let _ = match &code {
+        match &code {
             KeyCode::Char(':') => {
                 self.bar = Bar::Input(Input::empty());
-                Ok(())
             }
-            KeyCode::Char('h') | KeyCode::Left => self.move_with(Direction::Left),
-            KeyCode::Char('j') | KeyCode::Down => self.move_with(Direction::Down),
-            KeyCode::Char('k') | KeyCode::Up => self.move_with(Direction::Up),
-            KeyCode::Char('l') | KeyCode::Right => self.move_with(Direction::Right),
-            KeyCode::Char('H') => self.edge(&["left"]),
-            KeyCode::Char('J') => self.edge(&["down"]),
-            KeyCode::Char('K') => self.edge(&["up"]),
-            KeyCode::Char('L') => self.edge(&["right"]),
-            KeyCode::Char('d') => self.dot(&[]),
-            KeyCode::Char('a') => self.brush(&["add"]),
-            KeyCode::Char('s') => self.brush(&["subtract"]),
-            KeyCode::Char('i') => self.pen(&["down"]),
-            KeyCode::Char('I') => self.pen(&["up"]),
-            KeyCode::Char('A') => self.select(&["all"]),
-            KeyCode::Char('S') => self.select(&["none"]),
-            KeyCode::Char('F') => self.select(&["invert"]),
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.move_with(Direction::Left);
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.move_with(Direction::Down);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.move_with(Direction::Up);
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.move_with(Direction::Right);
+            }
+            KeyCode::Char('H') => {
+                self.edge(&["left"]);
+            }
+            KeyCode::Char('J') => {
+                self.edge(&["down"]);
+            }
+            KeyCode::Char('K') => {
+                self.edge(&["up"]);
+            }
+            KeyCode::Char('L') => {
+                self.edge(&["right"]);
+            }
+            KeyCode::Char('d') => {
+                self.dot(&[]);
+            }
+            KeyCode::Char('a') => {
+                self.brush(&["add"]);
+            }
+            KeyCode::Char('s') => {
+                self.brush(&["subtract"]);
+            }
+            KeyCode::Char('i') => {
+                self.pen(&["down"]);
+            }
+            KeyCode::Char('I') => {
+                self.pen(&["up"]);
+            }
+            KeyCode::Char('A') => {
+                self.select(&["all"]);
+            }
+            KeyCode::Char('S') => {
+                self.select(&["none"]);
+            }
+            KeyCode::Char('F') => {
+                self.select(&["invert"]);
+            }
             KeyCode::Esc => {
                 self.argument = 0;
-                Ok(())
             }
-            KeyCode::Char('f') => self.bucket(&[]),
-            KeyCode::Char('p') => self.pick(&[]),
-            KeyCode::Char('u') => self.undo(&[]),
-            KeyCode::Char('U') => self.redo(&[]),
-            KeyCode::Char('o') => self.copy(&[]),
-            KeyCode::Char('O') => self.paste(&[]),
+            KeyCode::Char('f') => {
+                self.bucket(&[]);
+            }
+            KeyCode::Char('p') => {
+                self.pick(&[]);
+            }
+            KeyCode::Char('u') => {
+                self.undo(&[]);
+            }
+            KeyCode::Char('U') => {
+                self.redo(&[]);
+            }
+            KeyCode::Char('o') => {
+                self.copy(&[]);
+            }
+            KeyCode::Char('O') => {
+                self.paste(&[]);
+            }
             KeyCode::Char(c) => {
                 if let Some(i) = c.to_digit(10) {
                     self.append_argument(i as u8)
                 };
-                Ok(())
             }
-            _ => Ok(()),
+            _ => {}
         };
     }
 }
 
-const COMMANDS: [Command; 23] = [
+const COMMANDS: [Command; 24] = [
     Command::new("open", &["o"], 1, 1, State::open),
     Command::new("open!", &["o!"], 1, 1, State::open_force),
     Command::new("write", &["w"], 0, 1, State::write),
@@ -841,4 +997,5 @@ const COMMANDS: [Command; 23] = [
     Command::new("fuzzy", &["f"], 0, 1, State::fuzzy),
     Command::new("copy", &[], 0, 0, State::copy),
     Command::new("paste", &[], 0, 0, State::paste),
+    Command::new("clipboard", &[], 2, 2, State::clipboard),
 ];
