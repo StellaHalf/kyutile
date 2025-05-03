@@ -15,7 +15,7 @@ use crate::{
     tiles::TILES,
 };
 
-const SELECT_COLOR: Color = Color::Rgb(127, 127, 255);
+const SELECT_COLOR: Color = Color::Rgb(0, 0, 255);
 const CURSOR_COLOR: Color = Color::Rgb(255, 0, 0);
 
 impl State {
@@ -28,23 +28,21 @@ impl State {
                     x == self.map.map[0].len() + 1,
                     y == self.map.map.len() + 1,
                 ) {
-                    (true, true, _, _) => Paragraph::new("\u{250c}\u{2500}"),
-                    (true, _, _, true) => Paragraph::new("\u{2514}\u{2500}"),
-                    (_, true, true, _) => Paragraph::new("\u{2500}\u{2510}"),
-                    (_, _, true, true) => Paragraph::new("\u{2500}\u{2518}"),
-                    (false, true, false, _) | (false, _, false, true) => {
-                        Paragraph::new("\u{2500}\u{2500}")
-                    }
-                    (true, false, _, false) => Paragraph::new("\u{2502} "),
-                    (_, false, true, false) => Paragraph::new(" \u{2502}"),
+                    (true, true, _, _) => Paragraph::new("|-"),
+                    (true, _, _, true) => Paragraph::new("|-"),
+                    (_, true, true, _) => Paragraph::new("-|"),
+                    (_, _, true, true) => Paragraph::new("-|"),
+                    (false, true, false, _) | (false, _, false, true) => Paragraph::new("--"),
+                    (true, false, _, false) => Paragraph::new("| "),
+                    (_, false, true, false) => Paragraph::new(" |"),
                     _ => {
                         let j = x - 1;
                         let i = y - 1;
                         let select = self.map.select.contains(&(i, j));
                         Paragraph::new(if j == self.cursorx && i == self.cursory {
-                            "»«"
+                            "<>"
                         } else if select {
-                            "╲╲"
+                            "\\\\"
                         } else {
                             "  "
                         })
