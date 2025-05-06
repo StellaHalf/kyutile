@@ -538,7 +538,7 @@ impl State {
             let mut new_frontier = HashSet::new();
             frontier.insert((cursory, cursorx));
             let tile = map[cursory][cursorx];
-            let mut i = match args.get(0) {
+            let mut i = match args.first() {
                 Some(arg) => parse_usize(arg)? as isize,
                 None => -1,
             };
@@ -547,7 +547,7 @@ impl State {
                 reached.extend(&frontier);
                 new_frontier.clear();
                 for (i, j) in frontier.clone() {
-                    for (di, dj) in vec![(-1, 0), (0, -1), (1, 0), (0, 1)] {
+                    for (di, dj) in [(-1, 0), (0, -1), (1, 0), (0, 1)] {
                         let ni = i as isize + di;
                         let nj = j as isize + dj;
                         if ni >= 0
@@ -803,10 +803,8 @@ impl State {
                 .iter()
                 .map(|((i, j), tile)| {
                     (
-                        (*i as isize + self.cursory as isize - (clipboard.offsety as isize))
-                            as usize,
-                        (*j as isize + self.cursorx as isize - (clipboard.offsetx as isize))
-                            as usize,
+                        (*i + self.cursory as isize - (clipboard.offsety as isize)) as usize,
+                        (*j + self.cursorx as isize - (clipboard.offsetx as isize)) as usize,
                         tile,
                     )
                 })
@@ -825,8 +823,8 @@ impl State {
 
     pub(crate) fn clipboard(&mut self, args: &[&str]) -> CommandResult {
         if let Some(clipboard) = &mut self.clipboard {
-            match (args[0], args[1]) {
-                ("rotate", "anticlockwise") => {
+            match args[0].to_lowercase().as_str() {
+                "rotate anticlockwise" | "a" => {
                     clipboard.content = clipboard
                         .content
                         .iter()
@@ -842,7 +840,7 @@ impl State {
                         .collect();
                     CommandResult::Ok("Rotated the clipboard anticlockwise".to_owned())
                 }
-                ("rotate", "clockwise") => {
+                "rotate clockwise" | "c" => {
                     clipboard.content = clipboard
                         .content
                         .iter()
@@ -858,7 +856,7 @@ impl State {
                         .collect();
                     CommandResult::Ok("Rotated the clipboard clockwise".to_owned())
                 }
-                ("reflect", "horizontal") => {
+                "reflect horizontal" | "h" => {
                     clipboard.content = clipboard
                         .content
                         .iter()
@@ -866,7 +864,7 @@ impl State {
                         .collect();
                     CommandResult::Ok("Reflected the clipboard horizontally".to_owned())
                 }
-                ("reflect", "vertical") => {
+                "reflect vertical" | "v" => {
                     clipboard.content = clipboard
                         .content
                         .iter()
@@ -997,5 +995,5 @@ const COMMANDS: [Command; 24] = [
     Command::new("fuzzy", &["f"], 0, 1, State::fuzzy),
     Command::new("copy", &[], 0, 0, State::copy),
     Command::new("paste", &[], 0, 0, State::paste),
-    Command::new("clipboard", &[], 2, 2, State::clipboard),
+    Command::new("clipboard", &["c"], 1, 1, State::clipboard),
 ];
