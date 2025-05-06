@@ -93,7 +93,7 @@ The following commands exist for the sake of completeness, but are recommended t
 | `O`          | `paste`                                            |
 | `p`          | `pick`                                             |
 
-The argument, used only for the move bindings, can be input using numbers, and cleared with the `Esc` key. 
+The argument, used only for the move bindings, can be inputted using numbers, and cleared with the `Esc` key. 
 
 ## Development
 
