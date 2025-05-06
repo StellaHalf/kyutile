@@ -20,7 +20,7 @@ from the command list below and execute it with the `return` key. Additionally, 
 A simple example of using kyutile is as follows:
 1. Create an empty map using `:n <width> <height>`, or open a file using `:o path`.
 2. Select a tile using `:t <tile>` (for example `:t stop`).
-3. Move the cursor using either the arrow keys or the `h``j``k``l` keys.
+3. Move the cursor using either the arrow keys or the `h` `j` `k` `l` keys.
 4. Set the tile at the cursor using the `d` key.
 5. Save your work using `:w <path>` and quit using `:q`. Once you have saved or if you began with `:o`, just `:w` suffices.
 
@@ -70,9 +70,9 @@ The following commands exist for the sake of completeness, but are recommended t
 
 | Keys         | Command                                            |
 | ------------ | -------------------------------------------------- |
-| 'h', `Left`  | `move left` \<argument\>?                          |
-| 'j', `Down`  | `move down` \<argument\>?                          |
-| 'k', `Up`    | `move up` \<argument\>?                            |
+| `h`, `Left`  | `move left` \<argument\>?                          |
+| `j`, `Down`  | `move down` \<argument\>?                          |
+| `k`, `Up`    | `move up` \<argument\>?                            |
 | `l`, `Right` | `move right` \<argument\>?                         |
 | `H`          | `edge left`                                        |
 | `J`          | `edge down`                                        |
@@ -94,3 +94,15 @@ The following commands exist for the sake of completeness, but are recommended t
 | `p`          | `pick`                                             |
 
 The argument, used only for the move bindings, can be input using numbers, and cleared with the `Esc` key. 
+
+## Development
+
+For bug reports or reasonable feature requests, you can use issues or ask me directly. I won't invest too much time into
+actively maintaining this project but quality pull requests are possiblle. To that end, you can fork and clone the `dev` branch
+and run it locally with `cargo run --release`.
+
+Potential future updates could include:
+- custom keybinds and aliases via a local config file
+- more shapes, potentially custom shapes with rudimentary formula parsing
+- better documentation
+- UI improvements
