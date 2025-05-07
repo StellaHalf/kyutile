@@ -81,7 +81,7 @@ The following commands exist for the sake of completeness, but are recommended t
 | `d`          | `dot`                                              |
 | `f`          | `bucket`                                           |
 | `a`          | `brush add`                                        |
-| `s`          | `brush subtrac`                                    |
+| `s`          | `brush subtract`                                    |
 | `A`          | `select all`                                       |
 | `S`          | `select none`                                      |
 | `F`          | `select invert`                                    |
