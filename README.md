@@ -98,7 +98,7 @@ The argument, used only for the move bindings, can be inputted using numbers, an
 ## Development
 
 For bug reports or reasonable feature requests, you can use issues or ask me directly. I won't invest too much time into
-actively maintaining this project but quality pull requests are possiblle. To that end, you can fork and clone the `dev` branch
+actively maintaining this project but quality pull requests are possible. To that end, you can fork and clone the `dev` branch
 and run it locally with `cargo run --release`.
 
 Potential future updates could include:
